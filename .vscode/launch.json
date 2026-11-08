@@ -1,0 +1,353 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backtest Studio (web app)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "streamlit",
+      "args": [
+        "run",
+        "${workspaceFolder}/app.py",
+        "--server.port",
+        "8501"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Backtest: 5min SMA 20/50",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_backtest.py",
+      "args": [
+        "--timeframe",
+        "5min",
+        "--fast",
+        "20",
+        "--slow",
+        "50",
+        "--open"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Backtest: 5min, SL 20 / TP 40, 1% risk, 2pt slippage",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_backtest.py",
+      "args": [
+        "--timeframe",
+        "5min",
+        "--fast",
+        "20",
+        "--slow",
+        "50",
+        "--sl",
+        "20",
+        "--tp",
+        "40",
+        "--sizing",
+        "risk",
+        "--risk-pct",
+        "1",
+        "--slippage",
+        "2",
+        "--open"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Backtest: choose settings",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_backtest.py",
+      "args": [
+        "--timeframe",
+        "${input:timeframe}",
+        "--fast",
+        "${input:fast}",
+        "--slow",
+        "${input:slow}",
+        "--sides",
+        "${input:sides}",
+        "--entry",
+        "${input:entry}",
+        "--entry-offset",
+        "${input:entryOffset}",
+        "--sl",
+        "${input:sl}",
+        "--tp",
+        "${input:tp}",
+        "--trail",
+        "${input:trail}",
+        "--sizing",
+        "${input:sizing}",
+        "--risk-pct",
+        "${input:riskPct}",
+        "--slippage",
+        "${input:slippage}",
+        "--trades",
+        "${input:trades}",
+        "--open"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Walk-forward: 5min, 4 rolling windows",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_walkforward.py",
+      "args": [
+        "--timeframe",
+        "5min",
+        "--windows",
+        "4",
+        "--train",
+        "0.5",
+        "--open"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Out-of-sample: 5min, 70/30 split",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_walkforward.py",
+      "args": [
+        "--mode",
+        "oos",
+        "--timeframe",
+        "5min",
+        "--split",
+        "0.7",
+        "--open"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Walk-forward / out-of-sample: choose settings",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_walkforward.py",
+      "args": [
+        "--mode",
+        "${input:wfMode}",
+        "--timeframe",
+        "${input:timeframe}",
+        "--fast",
+        "${input:fastList}",
+        "--slow",
+        "${input:slowList}",
+        "--objective",
+        "${input:objective}",
+        "--windows",
+        "${input:windows}",
+        "--sl",
+        "${input:sl}",
+        "--tp",
+        "${input:tp}",
+        "--sizing",
+        "${input:sizing}",
+        "--risk-pct",
+        "${input:riskPct}",
+        "--slippage",
+        "${input:slippage}",
+        "--open"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Backtest: 5min with zoomable chart window",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_backtest.py",
+      "args": [
+        "--timeframe",
+        "5min",
+        "--fast",
+        "20",
+        "--slow",
+        "50",
+        "--show"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Load USDJPY data",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backtest_engine/data_loader.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Run all tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "-q"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "timeframe",
+      "type": "pickString",
+      "description": "Bar size (aligned to the 17:00 New York day)",
+      "options": [
+        "1min",
+        "5min",
+        "15min",
+        "30min",
+        "1h",
+        "4h"
+      ],
+      "default": "5min"
+    },
+    {
+      "id": "fast",
+      "type": "promptString",
+      "description": "Fast SMA length, in bars",
+      "default": "20"
+    },
+    {
+      "id": "slow",
+      "type": "promptString",
+      "description": "Slow SMA length, in bars",
+      "default": "50"
+    },
+    {
+      "id": "sides",
+      "type": "pickString",
+      "description": "Trade long and short, or long only",
+      "options": [
+        "both",
+        "long"
+      ],
+      "default": "both"
+    },
+    {
+      "id": "entry",
+      "type": "pickString",
+      "description": "Entry order: market (next open), limit (better price), stop (breakout)",
+      "options": [
+        "market",
+        "limit",
+        "stop"
+      ],
+      "default": "market"
+    },
+    {
+      "id": "entryOffset",
+      "type": "promptString",
+      "description": "Limit/stop entry distance from the signal close, pips (ignored for market)",
+      "default": "0"
+    },
+    {
+      "id": "sl",
+      "type": "promptString",
+      "description": "Stop-loss, pips (0 = off)",
+      "default": "0"
+    },
+    {
+      "id": "tp",
+      "type": "promptString",
+      "description": "Take-profit, pips (0 = off)",
+      "default": "0"
+    },
+    {
+      "id": "trail",
+      "type": "promptString",
+      "description": "Trailing stop, pips (0 = off)",
+      "default": "0"
+    },
+    {
+      "id": "sizing",
+      "type": "pickString",
+      "description": "Position sizing (risk needs a stop-loss or trailing stop)",
+      "options": [
+        "fixed",
+        "risk",
+        "equity"
+      ],
+      "default": "fixed"
+    },
+    {
+      "id": "riskPct",
+      "type": "promptString",
+      "description": "Risk per trade, % of equity (risk sizing only)",
+      "default": "1"
+    },
+    {
+      "id": "slippage",
+      "type": "promptString",
+      "description": "Slippage per fill, points (0 = none)",
+      "default": "0"
+    },
+    {
+      "id": "trades",
+      "type": "pickString",
+      "description": "Trades to show in the trade log (the CSV always has all of them)",
+      "options": [
+        "20",
+        "50",
+        "100",
+        "all"
+      ],
+      "default": "20"
+    },
+    {
+      "id": "wfMode",
+      "type": "pickString",
+      "description": "Walk-forward (re-tune each window) or one out-of-sample split",
+      "options": [
+        "walkforward",
+        "oos"
+      ],
+      "default": "walkforward"
+    },
+    {
+      "id": "fastList",
+      "type": "promptString",
+      "description": "Fast SMA lengths to try, comma-separated",
+      "default": "5,10,20,30,50"
+    },
+    {
+      "id": "slowList",
+      "type": "promptString",
+      "description": "Slow SMA lengths to try, comma-separated",
+      "default": "50,100,150,200"
+    },
+    {
+      "id": "objective",
+      "type": "pickString",
+      "description": "What the parameter search maximises",
+      "options": [
+        "sharpe",
+        "net_pnl",
+        "profit_factor",
+        "sortino",
+        "calmar",
+        "expectancy"
+      ],
+      "default": "sharpe"
+    },
+    {
+      "id": "windows",
+      "type": "promptString",
+      "description": "Walk-forward test windows",
+      "default": "4"
+    }
+  ]
+}

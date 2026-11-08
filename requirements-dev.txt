@@ -1,0 +1,8 @@
+# Extra tools for working on the project locally: tests and notebooks.
+-r requirements.txt
+pytest>=7.0
+scipy>=1.11
+ipykernel
+nbformat
+nbclient
+pyflakes

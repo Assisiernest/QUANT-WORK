@@ -1,0 +1,88 @@
+//@version=6
+// EMA Trend Bot (Forex) - simple example strategy
+// Buys when the fast EMA crosses above the slow EMA (and sells on the opposite cross),
+// filtered by a 200 EMA trend, RSI and a trading session. Every trade gets an
+// ATR-based stop loss and a take profit at a fixed reward:risk ratio, sized so a
+// stop-out loses a fixed % of the account.
+strategy("EMA Trend Bot (Forex)", overlay = true, initial_capital = 10000, currency = currency.USD,
+     default_qty_type = strategy.fixed, default_qty_value = 1000, pyramiding = 0, slippage = 2)
+
+// ---------- Inputs ----------
+grpTrend = "Trend"
+fastLen  = input.int(20, "Fast EMA", minval = 1, group = grpTrend)
+slowLen  = input.int(50, "Slow EMA", minval = 1, group = grpTrend)
+trendLen = input.int(200, "Trend filter EMA", minval = 1, group = grpTrend)
+useTrend = input.bool(true, "Only trade in the direction of the trend EMA", group = grpTrend)
+
+grpRsi      = "RSI filter"
+rsiLen      = input.int(14, "RSI length", minval = 1, group = grpRsi)
+rsiLongMax  = input.int(70, "Skip longs when RSI is above", group = grpRsi)
+rsiShortMin = input.int(30, "Skip shorts when RSI is below", group = grpRsi)
+
+grpRisk = "Exits & risk"
+atrLen  = input.int(14, "ATR length", minval = 1, group = grpRisk)
+slMult  = input.float(1.5, "Stop loss (x ATR)", minval = 0.1, step = 0.1, group = grpRisk)
+rr      = input.float(2.0, "Take profit (reward:risk)", minval = 0.1, step = 0.1, group = grpRisk)
+riskPct = input.float(1.0, "Risk per trade (% of equity)", minval = 0.1, maxval = 10, step = 0.1, group = grpRisk)
+lotStep = input.int(1000, "Round size to (units, 1000 = micro lot)", minval = 1, group = grpRisk)
+
+grpSess    = "Session"
+useSession = input.bool(true, "Only open trades during the session", group = grpSess)
+sess       = input.session("0700-1700", "Session (UTC, London + New York)", group = grpSess)
+
+grpTrade      = "Direction"
+allowLongs    = input.bool(true, "Allow longs", group = grpTrade)
+allowShorts   = input.bool(true, "Allow shorts", group = grpTrade)
+
+// ---------- Indicators ----------
+fastEma  = ta.ema(close, fastLen)
+slowEma  = ta.ema(close, slowLen)
+trendEma = ta.ema(close, trendLen)
+rsi      = ta.rsi(close, rsiLen)
+atr      = ta.atr(atrLen)
+
+inSession = not useSession or not na(time(timeframe.period, sess, "UTC"))
+bullCross = ta.crossover(fastEma, slowEma)
+bearCross = ta.crossunder(fastEma, slowEma)
+
+longSignal  = allowLongs and bullCross and (not useTrend or close > trendEma) and rsi < rsiLongMax and inSession
+shortSignal = allowShorts and bearCross and (not useTrend or close < trendEma) and rsi > rsiShortMin and inSession
+
+// ---------- Position sizing ----------
+// Units such that hitting the stop loses riskPct of equity, converted from the
+// pair's quote currency (e.g. JPY for USDJPY) into the account currency.
+stopDist = atr * slMult
+fxRate   = request.currency_rate(syminfo.currency, strategy.account_currency)
+rawUnits = (strategy.equity * riskPct / 100) / (stopDist * syminfo.pointvalue * fxRate)
+units    = math.max(lotStep, math.floor(rawUnits / lotStep) * lotStep)
+
+// ---------- Orders ----------
+var float slLevel = na
+var float tpLevel = na
+
+if longSignal and strategy.position_size <= 0
+    slLevel := close - stopDist
+    tpLevel := close + stopDist * rr
+    strategy.entry("Long", strategy.long, qty = units)
+    strategy.exit("Long exit", "Long", stop = slLevel, limit = tpLevel)
+    alert("BUY " + syminfo.ticker + " | entry ~" + str.tostring(close, format.mintick) + " | SL " + str.tostring(slLevel, format.mintick) + " | TP " + str.tostring(tpLevel, format.mintick) + " | size " + str.tostring(units, "#") + " units", alert.freq_once_per_bar_close)
+
+if shortSignal and strategy.position_size >= 0
+    slLevel := close + stopDist
+    tpLevel := close - stopDist * rr
+    strategy.entry("Short", strategy.short, qty = units)
+    strategy.exit("Short exit", "Short", stop = slLevel, limit = tpLevel)
+    alert("SELL " + syminfo.ticker + " | entry ~" + str.tostring(close, format.mintick) + " | SL " + str.tostring(slLevel, format.mintick) + " | TP " + str.tostring(tpLevel, format.mintick) + " | size " + str.tostring(units, "#") + " units", alert.freq_once_per_bar_close)
+
+// ---------- Visuals ----------
+plot(fastEma, "Fast EMA", color.new(color.teal, 0), 2)
+plot(slowEma, "Slow EMA", color.new(color.orange, 0), 2)
+plot(trendEma, "Trend EMA", color.new(color.gray, 30), 1)
+
+inTrade = strategy.position_size != 0
+plot(inTrade ? slLevel : na, "Stop loss", color.red, 1, plot.style_linebr)
+plot(inTrade ? tpLevel : na, "Take profit", color.green, 1, plot.style_linebr)
+
+plotshape(longSignal, "Buy signal", shape.triangleup, location.belowbar, color.green, size = size.small)
+plotshape(shortSignal, "Sell signal", shape.triangledown, location.abovebar, color.red, size = size.small)
+bgcolor(useSession and inSession ? color.new(color.blue, 94) : na, title = "Session")

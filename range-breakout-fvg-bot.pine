@@ -1,0 +1,325 @@
+//@version=6
+// Range Breakout + FVG Bot
+// You set the range by clicking two corners on the chart (top-left = range high,
+// bottom-right = range low). After the range ends, the bot waits for a candle to
+// break fully out of it (the whole candle, wicks included, beyond the line). On an
+// upside breakout it looks for a bullish fair value gap (FVG) formed after the
+// breakout and places a buy stop order at the midpoint of the candle that completes
+// the gap; a downside breakout does the opposite. Stops sit beyond the FVG, targets are 3R,
+// the stop moves to break-even at 1R, size risks a fixed % of equity per trade,
+// and no new orders are placed around high-impact news.
+strategy("Range Breakout + FVG Bot", overlay = true, initial_capital = 10000, currency = currency.USD,
+     default_qty_type = strategy.fixed, default_qty_value = 1000, pyramiding = 0, slippage = 2,
+     max_boxes_count = 200, max_labels_count = 200)
+
+// ---------- Inputs ----------
+grpRange  = "Range (click the two corners on the chart)"
+rangeMode = input.string("Manual prices", "Range levels", options = ["Manual prices", "Auto: high/low between the two times"],
+     tooltip = "Manual prices: the two prices you click are the range high and low.\nAuto: the bot uses the highest high and lowest low of the candles between the two times you click.", group = grpRange)
+t1 = input.time(timestamp("27 Oct 2026 00:00 +0000"), "Corner 1 (start / high)", confirm = true, inline = "c1", group = grpRange)
+p1 = input.price(1.1000, "", confirm = true, inline = "c1", group = grpRange)
+t2 = input.time(timestamp("28 Oct 2026 00:00 +0000"), "Corner 2 (end / low)", confirm = true, inline = "c2", group = grpRange)
+p2 = input.price(1.0900, "", confirm = true, inline = "c2", group = grpRange)
+
+grpBrk      = "Breakout (full candle, wicks included, beyond the line)"
+resetInside = input.bool(true, "Cancel the setup if price closes back inside the range", group = grpBrk)
+maxTrades   = input.int(2, "Max trades per range", minval = 1, group = grpBrk)
+
+grpFvg     = "Fair value gap"
+brkInFvg   = input.bool(true, "Breakout candle can be the FVG's middle candle", tooltip = "Off: all three FVG candles must come after the breakout candle.", group = grpFvg)
+fvgOutside = input.bool(true, "FVG must sit fully outside the range", group = grpFvg)
+minFvgAtr  = input.float(0.1, "Minimum FVG size (x ATR)", minval = 0, step = 0.05, group = grpFvg)
+expiryBars = input.int(20, "Cancel the setup if not filled after (bars)", minval = 1,
+     tooltip = "Entry is always a stop order at the midpoint of the candle that completes the FVG.", group = grpFvg)
+
+grpRisk  = "Exits & risk"
+stopMode = input.string("FVG first candle", "Stop loss beyond", options = ["FVG first candle", "Far edge of FVG", "Range line"], group = grpRisk)
+atrLen   = input.int(14, "ATR length", minval = 1, group = grpRisk)
+slBufAtr = input.float(0.1, "Stop buffer (x ATR)", minval = 0, step = 0.05, group = grpRisk)
+rr       = input.float(3.0, "Take profit (reward:risk)", minval = 0.1, step = 0.1, group = grpRisk)
+useBE    = input.bool(true, "Move stop to break-even", inline = "be", group = grpRisk)
+beAtR    = input.float(1.0, "at R", minval = 0.1, step = 0.1, inline = "be", group = grpRisk)
+riskPct  = input.float(1.0, "Risk per trade (% of equity)", minval = 0.1, maxval = 10, step = 0.1, group = grpRisk)
+lotStep  = input.int(1000, "Round size to (units, 1000 = micro lot)", minval = 1, group = grpRisk)
+
+grpSess    = "Session"
+useSession = input.bool(false, "Only place orders during the session", group = grpSess)
+sess       = input.session("0700-1700", "Session (UTC, London + New York)", group = grpSess)
+
+grpNews     = "High-impact news filter"
+useNews     = input.bool(true, "Skip high-impact news", group = grpNews)
+newsBefore  = input.int(30, "Block from (minutes before)", minval = 0, inline = "nw", group = grpNews)
+newsAfter   = input.int(30, "until (minutes after)", minval = 0, inline = "nw", group = grpNews)
+autoNfp     = input.bool(true, "Auto-block US jobs report (NFP: 1st Friday, 8:30 New York time)", group = grpNews)
+cancelNews  = input.bool(true, "Cancel unfilled orders when news is near", group = grpNews)
+newsTz      = input.string("UTC", "News times are in", options = ["UTC", "America/New_York", "Europe/London"], group = grpNews)
+newsList    = input.text_area("2026-11-04 19:00\n2026-11-13 13:30", "News times (one per line: YYYY-MM-DD HH:MM)",
+     tooltip = "Copy high-impact (red folder) events for the currencies you trade from an economic calendar such as Forex Factory, e.g. CPI, FOMC, central-bank rate decisions. One date and time per line.", group = grpNews)
+
+grpAlert      = 'Alerts (create one alert with "alert() function calls only")'
+alertBreakout = input.bool(true, "Breakout of the range", group = grpAlert)
+alertOrder    = input.bool(true, "New order (entry, SL, TP, size)", group = grpAlert)
+alertFill     = input.bool(true, "Order filled", group = grpAlert)
+alertCancel   = input.bool(true, "Order cancelled", group = grpAlert)
+alertBE       = input.bool(true, "Move stop to break-even", group = grpAlert)
+alertClose    = input.bool(true, "Trade closed (TP / SL / break-even, with P&L)", group = grpAlert)
+alertNews     = input.bool(true, "High-impact news block starting", group = grpAlert)
+
+// ---------- Range ----------
+tStart = math.min(t1, t2)
+tEnd   = math.max(t1, t2)
+
+var float autoHi = na
+var float autoLo = na
+if time >= tStart and time <= tEnd
+    autoHi := na(autoHi) ? high : math.max(autoHi, high)
+    autoLo := na(autoLo) ? low : math.min(autoLo, low)
+
+manualRange = rangeMode == "Manual prices"
+rangeHigh   = manualRange ? math.max(p1, p2) : autoHi
+rangeLow    = manualRange ? math.min(p1, p2) : autoLo
+watching    = time > tEnd and not na(rangeHigh) and not na(rangeLow)
+
+// ---------- Helpers ----------
+atr       = ta.atr(atrLen)
+fxRate    = request.currency_rate(syminfo.currency, strategy.account_currency)
+inSession = not useSession or not na(time(timeframe.period, sess, "UTC"))
+
+fmt(float x) =>
+    str.tostring(x, format.mintick)
+
+sendAlert(bool enabled, string msg) =>
+    if enabled
+        alert(msg, alert.freq_once_per_bar_close)
+
+// Units such that hitting the stop loses riskPct of equity, converted from the
+// pair's quote currency (e.g. JPY for USDJPY) into the account currency.
+calcUnits(float dist) =>
+    raw = (strategy.equity * riskPct / 100) / (dist * syminfo.pointvalue * fxRate)
+    math.max(lotStep, math.floor(raw / lotStep) * lotStep)
+
+// ---------- State ----------
+var int   state      = 0    // 1 = broke up, hunting bullish FVG; -1 = broke down, hunting bearish FVG
+var int   brkBar     = na
+var int   tradesTaken = 0
+var bool  pending    = false
+var int   pendDir    = 0
+var int   pendBar    = na
+var int   tradesAtOrder = 0
+var float entryLvl   = na
+var float slLvl      = na
+var float tpLvl      = na
+var float fvgTop     = na
+var float fvgBot     = na
+var float riskDist   = na
+var bool  beDone     = false
+var bool  placed     = false  // false = setup found, waiting for price to be on the right side of the midpoint
+var float pendUnits  = na
+
+// ---------- News filter ----------
+// Parse the news list once into timestamps.
+var array<int> newsTimes = array.new<int>()
+if barstate.isfirst
+    clean = str.replace_all(str.replace_all(newsList, "\r", ""), " ", "")
+    for ln in str.split(clean, "\n")
+        // After removing spaces a line looks like "2026-11-0419:00"
+        if str.length(ln) >= 15
+            y  = int(str.tonumber(str.substring(ln, 0, 4)))
+            mo = int(str.tonumber(str.substring(ln, 5, 7)))
+            d  = int(str.tonumber(str.substring(ln, 8, 10)))
+            h  = int(str.tonumber(str.substring(ln, 10, 12)))
+            mi = int(str.tonumber(str.substring(ln, 13, 15)))
+            if not na(y) and not na(mo) and not na(d) and not na(h) and not na(mi)
+                newsTimes.push(timestamp(newsTz, y, mo, d, h, mi))
+
+// The window is checked against this bar and the next one, since an order placed
+// at this bar's close is live during the next bar.
+barEnd = time_close + (time_close - time)
+inNewsWindow(int t) =>
+    barEnd >= t - newsBefore * 60000 and time <= t + newsAfter * 60000
+
+newsNear = false
+if useNews
+    for t in newsTimes
+        if inNewsWindow(t)
+            newsNear := true
+            break
+    nyTz = "America/New_York"
+    if autoNfp and dayofweek(barEnd, nyTz) == dayofweek.friday and dayofmonth(barEnd, nyTz) <= 7
+        nfp = timestamp(nyTz, year(barEnd, nyTz), month(barEnd, nyTz), dayofmonth(barEnd, nyTz), 8, 30)
+        if inNewsWindow(nfp)
+            newsNear := true
+
+if newsNear and not newsNear[1]
+    sendAlert(alertNews, "HIGH-IMPACT NEWS soon on " + syminfo.ticker + " - no new trades for the next " + str.tostring(newsBefore + newsAfter) + " minutes" + (cancelNews ? ", unfilled orders cancelled" : ""))
+
+// 1) Pending order: filled, or should it be cancelled?
+totalTrades = strategy.closedtrades + strategy.opentrades
+doCancel    = false
+cancelWhy   = ""
+if pending
+    if placed and totalTrades > tradesAtOrder
+        pending     := false
+        placed      := false
+        tradesTaken += 1
+        sendAlert(alertFill, "FILLED " + (pendDir == 1 ? "BUY " : "SELL ") + syminfo.ticker + " @ " + fmt(entryLvl) + " | SL " + fmt(slLvl) + " | TP " + fmt(tpLvl))
+    else if bar_index - pendBar >= expiryBars
+        doCancel  := true
+        cancelWhy := "not filled in time"
+    else if pendDir == 1 ? close < fvgBot : close > fvgTop
+        doCancel  := true
+        cancelWhy := "price closed through the FVG"
+    else if not placed and (pendDir == 1 ? high >= tpLvl : low <= tpLvl)
+        doCancel  := true
+        cancelWhy := "price reached the target before the stop order could be placed"
+    else if newsNear and cancelNews
+        doCancel  := true
+        cancelWhy := "high-impact news nearby"
+
+// 2) Breakouts and resets (the whole candle, wicks included, must be beyond the line)
+upBreak = low > rangeHigh
+dnBreak = high < rangeLow
+
+if watching
+    if resetInside and ((state == 1 and close < rangeHigh) or (state == -1 and close > rangeLow))
+        if pending and pendDir == state
+            doCancel  := true
+            cancelWhy := "price closed back inside the range"
+        state := 0
+
+    if upBreak and state != 1 and tradesTaken < maxTrades
+        if pending and pendDir == -1
+            doCancel  := true
+            cancelWhy := "opposite breakout"
+        state  := 1
+        brkBar := bar_index
+        label.new(bar_index, high, "Bull breakout", style = label.style_label_down, color = color.green, textcolor = color.white, size = size.small)
+        sendAlert(alertBreakout, "BULLISH BREAKOUT " + syminfo.ticker + " above " + fmt(rangeHigh) + " - watching for a bullish FVG")
+
+    if dnBreak and state != -1 and tradesTaken < maxTrades
+        if pending and pendDir == 1
+            doCancel  := true
+            cancelWhy := "opposite breakout"
+        state  := -1
+        brkBar := bar_index
+        label.new(bar_index, low, "Bear breakout", style = label.style_label_up, color = color.red, textcolor = color.white, size = size.small)
+        sendAlert(alertBreakout, "BEARISH BREAKOUT " + syminfo.ticker + " below " + fmt(rangeLow) + " - watching for a bearish FVG")
+
+if doCancel and pending
+    what = pendDir == 1 ? "BUY" : "SELL"
+    if placed
+        strategy.cancel(pendDir == 1 ? "Long" : "Short")
+        strategy.cancel(pendDir == 1 ? "Long exit" : "Short exit")
+        sendAlert(alertCancel, "CANCEL " + what + " STOP order on " + syminfo.ticker + " - " + cancelWhy)
+    else
+        sendAlert(alertCancel, "CANCEL " + what + " setup on " + syminfo.ticker + " (no order was placed) - " + cancelWhy)
+    pending := false
+    placed  := false
+
+// 3) Look for an FVG formed after the breakout and place the order
+bullFvg     = low > high[2]
+bearFvg     = high < low[2]
+fvgAfterBrk = not na(brkBar) and (brkInFvg ? bar_index - 1 >= brkBar : bar_index - 2 > brkBar)
+canTrade    = watching and not pending and strategy.position_size == 0 and tradesTaken < maxTrades and inSession and not newsNear and fvgAfterBrk
+
+if canTrade and state == 1 and bullFvg
+    top = low
+    bot = high[2]
+    if top - bot >= atr * minFvgAtr and (not fvgOutside or bot >= rangeHigh)
+        entry = (high + low) / 2
+        sl    = (stopMode == "FVG first candle" ? low[2] : stopMode == "Far edge of FVG" ? bot : rangeHigh) - atr * slBufAtr
+        dist  = entry - sl
+        if dist > 0
+            units = calcUnits(dist)
+            tp    = entry + dist * rr
+            pending       := true
+            placed        := false
+            pendDir       := 1
+            pendBar       := bar_index
+            pendUnits     := units
+            entryLvl      := entry
+            slLvl         := sl
+            tpLvl         := tp
+            fvgTop        := top
+            fvgBot        := bot
+            riskDist      := dist
+            beDone        := false
+            box.new(bar_index - 2, top, bar_index + 5, bot, bgcolor = color.new(color.green, 80), border_color = color.new(color.green, 40))
+            if close >= entry
+                sendAlert(alertOrder, "BUY SETUP " + syminfo.ticker + " - waiting for a close below " + fmt(entry) + " to place a BUY STOP there")
+
+if canTrade and state == -1 and bearFvg
+    top = low[2]
+    bot = high
+    if top - bot >= atr * minFvgAtr and (not fvgOutside or top <= rangeLow)
+        entry = (high + low) / 2
+        sl    = (stopMode == "FVG first candle" ? high[2] : stopMode == "Far edge of FVG" ? top : rangeLow) + atr * slBufAtr
+        dist  = sl - entry
+        if dist > 0
+            units = calcUnits(dist)
+            tp    = entry - dist * rr
+            pending       := true
+            placed        := false
+            pendDir       := -1
+            pendBar       := bar_index
+            pendUnits     := units
+            entryLvl      := entry
+            slLvl         := sl
+            tpLvl         := tp
+            fvgTop        := top
+            fvgBot        := bot
+            riskDist      := dist
+            beDone        := false
+            box.new(bar_index - 2, top, bar_index + 5, bot, bgcolor = color.new(color.red, 80), border_color = color.new(color.red, 40))
+            if close <= entry
+                sendAlert(alertOrder, "SELL SETUP " + syminfo.ticker + " - waiting for a close above " + fmt(entry) + " to place a SELL STOP there")
+
+// 3b) Place the stop order at the midpoint. A buy stop must sit above the current
+// price (a sell stop below it), so if price is on the wrong side we wait for a
+// candle to close on the right side first.
+if pending and not placed and not newsNear and (pendDir == 1 ? close < entryLvl : close > entryLvl)
+    id = pendDir == 1 ? "Long" : "Short"
+    strategy.entry(id, pendDir == 1 ? strategy.long : strategy.short, qty = pendUnits, stop = entryLvl)
+    strategy.exit(id + " exit", id, stop = slLvl, limit = tpLvl)
+    placed        := true
+    tradesAtOrder := totalTrades
+    sendAlert(alertOrder, (pendDir == 1 ? "BUY STOP " : "SELL STOP ") + syminfo.ticker + " @ " + fmt(entryLvl) + " | SL " + fmt(slLvl) + " | TP " + fmt(tpLvl) + " | size " + str.tostring(pendUnits, "#") + " units")
+
+// 4) Break-even: once price has moved beAtR x risk in our favour, move the stop to the entry price
+if useBE and not beDone and strategy.position_size != 0 and not na(riskDist)
+    isLong  = strategy.position_size > 0
+    trigger = isLong ? entryLvl + riskDist * beAtR : entryLvl - riskDist * beAtR
+    if isLong ? high >= trigger : low <= trigger
+        beDone := true
+        slLvl  := strategy.position_avg_price
+        strategy.exit(isLong ? "Long exit" : "Short exit", isLong ? "Long" : "Short", stop = slLvl, limit = tpLvl)
+        sendAlert(alertBE, "MOVE STOP TO BREAK-EVEN on " + syminfo.ticker + " @ " + fmt(slLvl))
+
+// 5) Trade closed: report how it ended and the P&L
+var int lastClosed = 0
+if strategy.closedtrades > lastClosed
+    i      = strategy.closedtrades - 1
+    pnl    = strategy.closedtrades.profit(i)
+    reason = pnl > 0 ? "TAKE PROFIT hit" : beDone ? "BREAK-EVEN stop hit" : "STOP LOSS hit"
+    sendAlert(alertClose, "TRADE CLOSED " + syminfo.ticker + " - " + reason + " @ " + fmt(strategy.closedtrades.exit_price(i)) + " | P&L " + str.tostring(pnl, "#.##") + " " + strategy.account_currency + " | equity " + str.tostring(strategy.equity, "#.##"))
+    lastClosed := strategy.closedtrades
+
+// ---------- Visuals ----------
+var line hiLine   = na
+var line loLine   = na
+var box  rangeBox = na
+if barstate.islast and not na(rangeHigh) and not na(rangeLow)
+    line.delete(hiLine)
+    line.delete(loLine)
+    box.delete(rangeBox)
+    hiLine   := line.new(tStart, rangeHigh, tEnd, rangeHigh, xloc = xloc.bar_time, extend = extend.right, color = color.green, width = 2)
+    loLine   := line.new(tStart, rangeLow, tEnd, rangeLow, xloc = xloc.bar_time, extend = extend.right, color = color.red, width = 2)
+    rangeBox := box.new(tStart, rangeHigh, tEnd, rangeLow, xloc = xloc.bar_time, bgcolor = color.new(color.blue, 90), border_color = color.new(color.blue, 60))
+
+showLvls = pending or strategy.position_size != 0
+plot(showLvls ? entryLvl : na, "Entry", color.blue, 1, plot.style_linebr)
+plot(showLvls ? slLvl : na, "Stop loss", color.red, 1, plot.style_linebr)
+plot(showLvls ? tpLvl : na, "Take profit", color.green, 1, plot.style_linebr)
+
+bgcolor(watching and state == 1 ? color.new(color.green, 94) : watching and state == -1 ? color.new(color.red, 94) : na, title = "Hunting for FVG")
+bgcolor(newsNear ? color.new(color.gray, 85) : na, title = "News block")

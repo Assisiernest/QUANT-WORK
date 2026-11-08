@@ -1,0 +1,8 @@
+# What the app needs (Streamlit Cloud installs this file).
+streamlit>=1.40
+pandas>=2.0
+numpy>=1.26
+plotly>=5.24
+matplotlib>=3.8
+rich>=13.0
+jinja2>=3.1
