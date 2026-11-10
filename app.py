@@ -37,7 +37,8 @@ from backtest_engine.quantconnect import QCResult, parse_qc
 from backtest_engine.qcalgo import QC_TEMPLATE, AlgorithmError, run_algorithm
 
 import workspace
-from auth import PERMISSIONS, AuthError, User, UserStore
+import storage
+from auth import PERMISSIONS, AuthError, User, UserStore, data_dir
 from backtest_engine.signals import (BUILTINS, CUSTOM_TEMPLATE, SignalStrategy, StrategySpec, check_lookahead,
                                      load_custom)
 from backtest_engine.sizing import PercentEquity, RiskPercent
@@ -994,6 +995,16 @@ def current_user() -> User | None:
     return UserStore().get(name) if name else None
 
 
+def connect_storage() -> dict:
+    """Restore accounts and saved strategies from the data repository in the app's secrets
+    ([storage] repo / token), once per start. Without it they live only on this disk."""
+    try:
+        cfg = st.secrets.get("storage")
+    except Exception:  # no secrets file at all (normal when running locally)
+        cfg = None
+    return storage.connect(cfg, data_dir())
+
+
 def admin_from_secrets(store: UserStore) -> None:
     """Create the admin named in the app's secrets ([admin] username / password / name) if it's missing.
 
@@ -1023,6 +1034,7 @@ def running_locally() -> bool:
 
 def auth_gate() -> User | None:
     """The signed-in user, or None after drawing the sign-in (or first-run) screen."""
+    kept = connect_storage()
     store = UserStore()
     admin_from_secrets(store)
     name = st.session_state.get("user")
@@ -1033,6 +1045,9 @@ def auth_gate() -> User | None:
         st.session_state.clear()  # the account was deleted meanwhile
     _, mid, _ = st.columns([1, 1.4, 1])
     with mid:
+        if kept["state"] == "error":
+            st.warning("Saved accounts couldn't be loaded just now, so signing in may fail. "
+                       "Try again in a minute, or tell the app's owner.")
         st.title("Backtest Studio")
         if not store.has_users() and not running_locally():
             st.subheader("This app isn't set up yet")
@@ -1116,8 +1131,11 @@ def saved_strategies_ui(state_key: str, kind: str) -> None:
                 st.session_state[state_key] = workspace.load_strategy(user.username, pick)
                 st.rerun()
             if c2.button("Delete", key=f"del:{kind}"):
-                workspace.delete_strategy(user.username, pick)
-                st.rerun()
+                try:
+                    workspace.delete_strategy(user.username, pick)
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
         name = st.text_input("Save the code below as", key=f"savename:{kind}", placeholder="e.g. EMA trend v2")
         if st.button("Save", key=f"save:{kind}"):
             try:
@@ -1263,6 +1281,17 @@ def render_account(user: User) -> None:
 
 def render_admin(user: User) -> None:
     st.subheader("Manage users")
+    kept = storage.status()
+    if kept["state"] == "ok":
+        st.caption(f"Accounts and saved strategies are kept permanently in the private repository "
+                   f"**{kept['repo']}**.")
+    elif kept["state"] == "error":
+        st.error(f"Permanent storage isn't working, so changes made now will be lost when the app restarts. "
+                 f"{kept['detail']}")
+    elif not running_locally():
+        st.warning("Permanent storage isn't set up: every account except the admin in the app's Secrets is "
+                   "lost when the app restarts. Add a `[storage]` section to the Secrets "
+                   "(see `.streamlit/secrets.toml.example`).")
     store = UserStore()
     users = store.list_users()
     show_table(pd.DataFrame([{

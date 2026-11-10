@@ -3,6 +3,9 @@
     <data dir>/users/<username>/strategies/<name>.py
     <data dir>/users/<username>/runs/<YYYYmmdd-HHMMSS>_<title>/meta.json (+ the run's files)
 
+Saved strategies are also copied to the data repository when one is configured (storage.py),
+so they survive restarts of a hosted app; saved runs are not.
+
 Names are reduced to safe characters and every path is checked to stay inside the
 user's folder, so one user can't read or overwrite another's files.
 """
@@ -15,6 +18,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+import storage
 from auth import check_username, data_dir
 
 MAX_STRATEGY_BYTES = 200_000
@@ -57,6 +61,7 @@ def save_strategy(username: str, name: str, code: str) -> str:
     base = _strategies(username)
     path = _inside(base, base / f"{_slug(name)}.py")
     path.write_text(code, encoding="utf-8")
+    _keep(path)
     return path.stem
 
 
@@ -67,7 +72,17 @@ def load_strategy(username: str, name: str) -> str:
 
 def delete_strategy(username: str, name: str) -> None:
     base = _strategies(username)
-    _inside(base, base / f"{_slug(name)}.py").unlink(missing_ok=True)
+    path = _inside(base, base / f"{_slug(name)}.py")
+    path.unlink(missing_ok=True)
+    _keep(path)
+
+
+def _keep(path: Path) -> None:
+    try:
+        storage.push(path, data_dir())
+    except storage.StorageError as exc:
+        raise ValueError(f"Done, but it couldn't be copied to permanent storage, so it will be lost "
+                         f"when the app restarts. {exc}") from None
 
 
 # --- runs ----------------------------------------------------------------------------------

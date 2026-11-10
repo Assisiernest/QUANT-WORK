@@ -1,7 +1,8 @@
 """User accounts for Backtest Studio: usernames, hashed passwords, roles and permissions.
 
 Accounts live in <data dir>/users.json. The data dir is ./app_data next to this file, or
-the folder in the BACKTEST_STUDIO_DATA environment variable. Passwords are never stored:
+the folder in the BACKTEST_STUDIO_DATA environment variable. When a data repository is
+configured (see storage.py) every change is also copied there, so accounts survive restarts. Passwords are never stored:
 only a scrypt hash with a random salt per user. After MAX_FAILURES wrong passwords in a row
 an account is locked for LOCKOUT_MINUTES.
 
@@ -22,6 +23,8 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import storage
 
 MAX_FAILURES = 5
 LOCKOUT_MINUTES = 5
@@ -92,11 +95,18 @@ class UserStore:
             return {"users": {}}
         return json.loads(self.path.read_text(encoding="utf-8"))
 
-    def _save(self, data: dict) -> None:
+    def _save(self, data: dict, important: bool = True) -> None:
+        """important=False: sign-in bookkeeping (last sign-in, wrong-password count); its
+        permanent copy is made in the background and a failure there is ignored."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         tmp.replace(self.path)  # atomic: a crash never leaves a half-written users file
+        try:
+            storage.push(self.path, data_dir(), wait=important)
+        except storage.StorageError as exc:
+            raise AuthError(f"Done, but it couldn't be copied to permanent storage, so it will be lost "
+                            f"when the app restarts. {exc}") from None
 
     @staticmethod
     def _user(username: str, rec: dict) -> User:
@@ -154,10 +164,10 @@ class UserStore:
                 if rec["failures"] >= MAX_FAILURES:
                     rec["locked_until"] = (_now() + timedelta(minutes=LOCKOUT_MINUTES)).isoformat()
                     rec["failures"] = 0
-                self._save(data)
+                self._save(data, important=False)
                 raise AuthError("Wrong username or password.")
             rec.update(failures=0, locked_until="", last_login=_now().isoformat())
-            self._save(data)
+            self._save(data, important=False)
         return self.get(u)
 
     def set_password(self, username: str, new_password: str, current_password: str | None = None) -> None:
@@ -197,7 +207,7 @@ class UserStore:
         with _lock:
             data = self._load()
             self._require(data, username).update(failures=0, locked_until="")
-            self._save(data)
+            self._save(data, important=False)
 
     def delete_user(self, username: str) -> None:
         with _lock:

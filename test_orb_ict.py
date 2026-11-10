@@ -216,3 +216,33 @@ def test_level_variant_skips_when_previous_day_high_is_in_the_way():
 def test_ict_filter_validation():
     with pytest.raises(Exception):
         run_bot(make_day(RANGE), ict_filter="fvg+nonsense")
+
+
+# --- Custom (signals) version -----------------------------------------------------------------
+def custom_positions(df, **kw):
+    from backtest_engine.signals import load_custom
+    fn, _ = load_custom(open("orb_ict_smc_custom.py", encoding="utf-8").read())
+    pos = fn(df, **kw)
+    return pos.set_axis(df.index.tz_convert("America/New_York").strftime("%H:%M"))
+
+
+def test_custom_setup1_long_until_target():
+    df = make_day({**RANGE, **BREAK_UP, "09:40": (101.5, 101.5, 100.9, 101.3),
+                   "09:45": (101.3, 102.5, 101.3, 102.4)})
+    pos = custom_positions(df)
+    assert pos["09:39"] == 0 and pos["09:40"] == 1 and pos["09:44"] == 1 and pos["09:45"] == 0
+    assert pos.abs().sum() == 5
+
+
+def test_custom_failed_breakout_long_then_short():
+    df = make_day({**RANGE, **BREAK_UP, "09:40": (101.5, 101.5, 100.8, 100.9), "09:41": (100.9, 100.9, 99.8, 99.9),
+                   "09:44": (99.9, 99.9, 99.6, 99.7), "09:45": (99.7, 100.1, 99.6, 99.9),
+                   "09:46": (99.9, 99.9, 98.5, 98.6)})
+    pos = custom_positions(df)
+    assert (pos["09:40"], pos["09:41"], pos["09:45"], pos["09:46"]) == (1, 0, -1, 0)
+
+
+def test_custom_closes_at_1600():
+    df = make_day({**RANGE, **BREAK_UP, "09:40": (101.5, 101.5, 100.9, 101.3)})
+    pos = custom_positions(df)
+    assert pos["15:58"] == 1 and pos["15:59"] == 0
