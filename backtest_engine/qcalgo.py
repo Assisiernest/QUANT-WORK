@@ -1040,6 +1040,8 @@ class QCAlgorithm(_Pascal):
         """Fill open limit / stop / market-on-open orders that this bar reaches."""
         s = sec.spread
         for order in [o for o in self._open_orders if o.symbol == sec.symbol]:
+            if order not in self._open_orders:
+                continue  # cancelled by on_order_event after an earlier fill this bar (e.g. one side of an OCO)
             buy = order.quantity > 0
             o_, h_, l_ = (bar.open + s, bar.high + s, bar.low + s) if buy else (bar.open, bar.high, bar.low)
             level, slip = None, False
